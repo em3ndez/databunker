@@ -2,10 +2,9 @@
 
 XTOKEN=$1
 if [ -z $XTOKEN ]; then
-  echo "missing api key parameter"
-  exit
+  echo "The API token is missing, assuming the DEMO API token"
+  XTOKEN="DEMO"
 fi
-
 DATABUNKER="http://localhost:3000"
 
 RESULT=`curl -s $DATABUNKER/v1/pactivity/share-data-with-sms-provider -XPOST \
@@ -20,7 +19,7 @@ echo "Create legal basis entity: $RESULT"
 
 RESULT=`curl -s $DATABUNKER/v1/pactivity/share-data-with-sms-provider/blah -XPOST \
    -H "X-Bunker-Token: $XTOKEN"`
-echo "Tryingto link fake legal basis to processing activity: $RESULT"
+echo "Trying to link a fake legal basis to processing activity: $RESULT"
 
 RESULT=`curl -s $DATABUNKER/v1/pactivity/share-data-with-sms-provider/core-send-sms-on-login -XPOST \
    -H "X-Bunker-Token: $XTOKEN"`
@@ -62,7 +61,7 @@ echo "Revoking legal basis object 2: $RESULT"
 RESULT=`curl -s $DATABUNKER/v1/agreement/contract-approval/email/test@securitybunker.io -XPOST \
    -H "X-Bunker-Token: $XTOKEN"  -H "Content-Type: application/json" \
    -d '{"lawfulbasis":"contract"}'`
-echo "Giving consent for fake legal basis: $RESULT"
+echo "Giving consent for a fake legal basis: $RESULT"
 
 RESULT=`curl -s $DATABUNKER/v1/agreement/core-send-sms-on-login/email/test@securitybunker.io -XDELETE -H "X-Bunker-Token: $XTOKEN"`
 echo "Withdraw legal basis 2 consent: $RESULT"

@@ -1,7 +1,7 @@
 package main
 
 import (
-	"fmt"
+	"log"
 	"net/http/httptest"
 	"strings"
 	"testing"
@@ -25,8 +25,15 @@ func helpUserLogin(mode string, identity string, code string) (map[string]interf
 	return helpServe(request)
 }
 
-func helpGetUserRequests() (map[string]interface{}, error) {
+func helpGetAllUserRequests() (map[string]interface{}, error) {
 	url := "http://localhost:3000/v1/requests"
+	request := httptest.NewRequest("GET", url, nil)
+	request.Header.Set("X-Bunker-Token", rootToken)
+	return helpServe(request)
+}
+
+func helpGetUserRequests(mode string, identity string) (map[string]interface{}, error) {
+	url := "http://localhost:3000/v1/requests/" + mode + "/" + identity
 	request := httptest.NewRequest("GET", url, nil)
 	request.Header.Set("X-Bunker-Token", rootToken)
 	return helpServe(request)
@@ -80,22 +87,12 @@ func TestUserLoginDelete(t *testing.T) {
 	if _, ok := raw["status"]; !ok || raw["status"].(string) != "ok" {
 		t.Fatalf("Failed to create user login: %s", raw["message"].(string))
 	}
-	/*
-		userBson, err := e.db.lookupUserRecordByIndex("email", email, e.conf)
-		if userBson == nil || err != nil {
-			t.Fatalf("Failed to lookupUserRecordByIndex")
-		}
-		tmpCode := int32(0)
-		if _, ok := userBson["tempcode"]; ok {
-			tmpCode = userBson["tempcode"].(int32)
-		}
-	*/
 	raw, _ = helpUserLogin("email", email, "4444") //strconv.Itoa(int(tmpCode)))
 	if _, ok := raw["status"]; !ok || raw["status"].(string) != "ok" {
 		t.Fatalf("Failed to create user login: %s", raw["message"].(string))
 	}
 	xtoken := raw["xtoken"].(string)
-	fmt.Printf("User login *** xtoken: %s\n", xtoken)
+	log.Printf("User login *** xtoken: %s...\n", xtoken[0:8])
 	oldRootToken := rootToken
 	rootToken = xtoken
 	raw, _ = helpAcceptAgreement("token", userTOKEN, "contract1", "")
@@ -130,7 +127,7 @@ func TestUserLoginDelete(t *testing.T) {
 	if _, ok := raw["status"]; !ok || raw["status"].(string) != "ok" {
 		t.Fatalf("Failed to get user app list with user xtoken\n")
 	}
-	fmt.Printf("apps: %s\n", raw["apps"])
+	log.Printf("apps: %s\n", raw["apps"])
 	// user asks to forget-me
 	raw, _ = helpDeleteUser("token", userTOKEN)
 	if _, ok := raw["status"]; !ok || raw["status"].(string) != "ok" {
@@ -141,13 +138,17 @@ func TestUserLoginDelete(t *testing.T) {
 	}
 	rtoken0 := raw["rtoken"].(string)
 	raw, _ = helpGetUserAppList(userTOKEN)
-	fmt.Printf("apps: %s\n", raw["apps"])
+	log.Printf("List apps: %s\n", raw["apps"])
 
 	rootToken = oldRootToken
+	userRequests, _ := helpGetUserRequests("token", userTOKEN)
+	if userRequests["total"].(float64) != 4 {
+		t.Fatalf("Wrong number of user requests\n")
+	}
 	// get user requests
-	raw, _ = helpGetUserRequests()
-	if raw["total"].(float64) != 3 {
-		t.Fatalf("Wrong number of user requests for admin to approve/reject/s\n")
+	raw, _ = helpGetAllUserRequests()
+	if raw["total"].(float64) != 4 {
+		t.Fatalf("Wrong number of user requests for admin to approval\n")
 	}
 	records := raw["rows"].([]interface{})
 	for id := range records {
@@ -161,7 +162,7 @@ func TestUserLoginDelete(t *testing.T) {
 			if rtoken != rtoken0 {
 				t.Fatalf("Rtoken0 is wrong\n")
 			}
-			fmt.Printf("** User request record: %s\n", rtoken)
+			log.Printf("** User request record: %s\n", rtoken)
 		}
 		raw8, _ := helpGetUserRequest(rtoken)
 		if raw8["status"].(string) != "ok" {
@@ -185,9 +186,9 @@ func TestUserLoginDelete(t *testing.T) {
 		}
 	}
 	helpApproveUserRequest(rtoken0)
-	raw, _ = helpGetUserRequests()
+	raw, _ = helpGetAllUserRequests()
 	if raw["total"].(float64) != 0 {
-		t.Fatalf("Wrong number of user requests for admin to approve/reject/s\n")
+		t.Fatalf("Wrong number of user requests for admin to approval\n")
 	}
 	// user should be deleted now
 	raw10, _ := helpGetUserAppList(userTOKEN)

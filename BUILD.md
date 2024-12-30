@@ -1,46 +1,44 @@
 # Building Databunker
 
-## Build for release
-
-```
-./release.sh
-```
-
-It will generate **databunker** executable. HTML files are built inside executable.
-
-## Debug version
+Use the following command:
 
 ```
 ./build.sh
 ```
 
-It will generate **databunker** executable that can be run on the same box.
-Web UI files will be fetched from ui/ directory.
+This command will generate the ```databunker``` executable, bundled with the web UI interface.
 
-## Build container
+## Building Databunker Container
 
-It will generate "securitybunker/databunker" container and save it locally.
+To generate the ```securitybunker/databunker``` container, use the following command:
 
 ```
-docker build -t securitybunker/databunker:latest .
+VERSION=$(cat ./version.txt)
+docker build -t securitybunker/databunker:$VERSION .
 ```
 
-## Push container
+## Pushing Container
 
-**Only for project admin:**
+For project admins only:
 
 ```
 docker login
+VERSION=$(cat ./version.txt)
+docker push securitybunker/databunker:$VERSION
+# Optionally, push container with the latest tag
+docker tag securitybunker/databunker:$VERSION securitybunker/databunker:latest
 docker push securitybunker/databunker:latest
 ```
 
-
-## Other usefull commands for working with containers:
+## Other Useful Commands for Working with Containers:
 
 ```
-docker rm dbunker
-docker kill dbunker
-docker container stats dbunker
+docker container stats databunker
 docker run --rm -ti alpine
 /bin/busybox wget localhost:3000
+```
+
+## Check what packages require cgo
+```
+go list -f "{{if .CgoFiles}}{{.ImportPath}}{{end}}" $(go list -f "{{.ImportPath}}{{range .Deps}} {{. }}{{end}}")
 ```

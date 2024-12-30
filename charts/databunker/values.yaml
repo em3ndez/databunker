@@ -56,7 +56,7 @@ image:
   ## Defaults to 'Always' if image tag is 'latest', else set to 'IfNotPresent'
   ## ref: https://kubernetes.io/docs/user-guide/images/#pre-pulling-images
   ##
-  pullPolicy: IfNotPresent
+  pullPolicy: Always
   ## Optionally specify an array of imagePullSecrets (secrets must be manually created in the namespace)
   ## ref: https://kubernetes.io/docs/tasks/configure-pod-container/pull-image-private-registry/
   ## Example:
@@ -105,7 +105,7 @@ databunkerAdminEmail: "user@example.com"
 command: ["/bin/sh"]
 ## @param args Override default container args (useful when using custom images)
 ##
-args: ["-c", "/databunker/bin/databunker -init -db databunkerdb; /databunker/bin/databunker -db databunkerdb -conf /databunker/conf/databunker.yaml"]
+args: ["-c", "/databunker/bin/databunker -db databunkerdb -conf /databunker/conf/databunker.yaml"]
 ## @param updateStrategy.type Update strategy - only really applicable for deployments with RWO PVs attached
 ## If replicas = 1, an update can get "stuck", as the previous pod remains attached to the
 ## PV, and the "incoming" pod can never start. Changing the strategy to "Recreate" will

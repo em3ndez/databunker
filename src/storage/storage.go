@@ -1,9 +1,10 @@
 package storage
 
 import (
-	"go.mongodb.org/mongo-driver/bson"
 	"net/http"
 	"os"
+
+	"go.mongodb.org/mongo-driver/bson"
 )
 
 // Tbl is used to store table id
@@ -36,6 +37,10 @@ var TblName = &listTbls{
 	Sharedrecords:        8,
 	Processingactivities: 9,
 }
+
+var (
+	allTables []string
+)
 
 func GetTable(t Tbl) string {
 	switch t {
@@ -79,22 +84,22 @@ type BackendDB interface {
 	CountRecords(Tbl, string, string) (int64, error)
 	UpdateRecord(Tbl, string, string, *bson.M) (int64, error)
 	UpdateRecordInTable(string, string, string, *bson.M) (int64, error)
-	UpdateRecord2(Tbl, string, string, string, string, *bson.M, *bson.M) (int64, error)
-	UpdateRecordInTable2(string, string, string, string, string, *bson.M, *bson.M) (int64, error)
+	UpdateRecord2(Tbl, string, string, string, string, *bson.M, []string) (int64, error)
+	UpdateRecordInTable2(string, string, string, string, string, *bson.M, []string) (int64, error)
 	LookupRecord(Tbl, bson.M) (bson.M, error)
 	GetRecord(Tbl, string, string) (bson.M, error)
-	GetRecordInTable(string, string, string) (bson.M, error)
+	GetRecordFromTable(string, string, string) (bson.M, error)
 	GetRecord2(Tbl, string, string, string, string) (bson.M, error)
 	DeleteRecord(Tbl, string, string) (int64, error)
 	DeleteRecordInTable(string, string, string) (int64, error)
 	DeleteRecord2(Tbl, string, string, string, string) (int64, error)
 	DeleteExpired0(Tbl, int32) (int64, error)
 	DeleteExpired(Tbl, string, string) (int64, error)
-	CleanupRecord(Tbl, string, string, interface{}) (int64, error)
-	GetExpiring(Tbl, string, string) ([]bson.M, error)
-	GetUniqueList(Tbl, string) ([]bson.M, error)
-	GetList0(Tbl, int32, int32, string) ([]bson.M, error)
-	GetList(Tbl, string, string, int32, int32, string) ([]bson.M, error)
+	CleanupRecord(Tbl, string, string, []string) (int64, error)
+	GetExpiring(Tbl, string, string) ([]map[string]interface{}, error)
+	GetUniqueList(Tbl, string) ([]map[string]interface{}, error)
+	GetList0(Tbl, int32, int32, string) ([]map[string]interface{}, error)
+	GetList(Tbl, string, string, int32, int32, string) ([]map[string]interface{}, error)
 	GetAllTables() ([]string, error)
 	ValidateNewApp(appName string) bool
 }
@@ -104,6 +109,11 @@ func getDBObj() BackendDB {
 	var db BackendDB
 	if len(host) > 0 {
 		db = &MySQLDB{}
+		return db
+	}
+	host = os.Getenv("PGSQL_HOST")
+	if len(host) > 0 {
+		db = &PGSQLDB{}
 	} else {
 		db = &SQLiteDB{}
 	}
@@ -133,7 +143,7 @@ func CreateTestDB() string {
 	return db.CreateTestDB()
 }
 
-func contains(slice []string, item string) bool {
+func SliceContains(slice []string, item string) bool {
 	set := make(map[string]struct{}, len(slice))
 	for _, s := range slice {
 		set[s] = struct{}{}

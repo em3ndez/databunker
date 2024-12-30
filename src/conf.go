@@ -6,6 +6,8 @@ import (
 	"net/http"
 
 	"github.com/julienschmidt/httprouter"
+	"github.com/securitybunker/databunker/src/autocontext"
+	"github.com/securitybunker/databunker/src/utils"
 )
 
 func (e mainEnv) setupConfRouter(router *httprouter.Router) *httprouter.Router {
@@ -15,10 +17,14 @@ func (e mainEnv) setupConfRouter(router *httprouter.Router) *httprouter.Router {
 	return router
 }
 
+func (e mainEnv) initContext(r *http.Request) {
+	autocontext.Set(r, "host", r.Host)
+}
+
 func (e mainEnv) cookieSettings(w http.ResponseWriter, r *http.Request, ps httprouter.Params) {
 	resultJSON, scriptsJSON, _, err := e.db.getLegalBasisCookieConf()
 	if err != nil {
-		returnError(w, r, "internal error", 405, err, nil)
+		utils.ReturnError(w, r, "internal error", 405, err, nil)
 		return
 	}
 	resultUIConfJSON, _ := json.Marshal(e.conf.UI)
@@ -29,7 +35,7 @@ func (e mainEnv) cookieSettings(w http.ResponseWriter, r *http.Request, ps httpr
 }
 
 func (e mainEnv) configurationDump(w http.ResponseWriter, r *http.Request, ps httprouter.Params) {
-	if e.enforceAuth(w, r, nil) == "" {
+	if e.EnforceAuth(w, r, nil) == "" {
 		return
 	}
 	resultJSON, _ := json.Marshal(e.conf)

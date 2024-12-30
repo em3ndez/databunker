@@ -1,7 +1,6 @@
 package main
 
 import (
-	"fmt"
 	"log"
 	"net/http"
 	"net/url"
@@ -12,23 +11,23 @@ import (
 func sendCodeByPhone(code int32, identity string, cfg Config) {
 	domain := "https://api.twilio.com"
 	client := &http.Client{}
-	sendCodeByPhoneDo(domain, client, code, identity, cfg)
+	sendCodeByPhoneDo(domain, client, code, identity, &cfg)
 }
 
-func sendCodeByPhoneDo(domain string, client *http.Client, code int32, identity string, cfg Config) {
-	if len(cfg.Sms.Url) == 0 {
+func sendCodeByPhoneDo(domain string, client *http.Client, code int32, identity string, cfg *Config) {
+	if len(cfg.Sms.URL) == 0 {
 		log.Printf("SMS gateway provider URL is missing")
 		return
 	}
 	msg := "Databunker code " + strconv.Itoa(int(code))
-	finalUrl := cfg.Sms.Url
-	finalUrl = strings.ReplaceAll(finalUrl, "_PHONE_", url.QueryEscape(identity))
-	finalUrl = strings.ReplaceAll(finalUrl, "_FROM_", url.QueryEscape(cfg.Sms.From))
-	finalUrl = strings.ReplaceAll(finalUrl, "_TOKEN_", url.QueryEscape(cfg.Sms.Token))
-	finalUrl = strings.ReplaceAll(finalUrl, "_MSG_", url.QueryEscape(msg))
-	fmt.Printf("finalUrl: %s\n", finalUrl)
+	finalURL := cfg.Sms.URL
+	finalURL = strings.ReplaceAll(finalURL, "_PHONE_", url.QueryEscape(identity))
+	finalURL = strings.ReplaceAll(finalURL, "_FROM_", url.QueryEscape(cfg.Sms.From))
+	finalURL = strings.ReplaceAll(finalURL, "_TOKEN_", url.QueryEscape(cfg.Sms.Token))
+	finalURL = strings.ReplaceAll(finalURL, "_MSG_", url.QueryEscape(msg))
+	log.Printf("sendCodeByPhoneDo finalURL: %s\n", finalURL)
 	if len(cfg.Sms.Method) == 0 || strings.ToUpper(cfg.Sms.Method) == "GET" {
-		req, _ := http.NewRequest("GET", finalUrl, nil)
+		req, _ := http.NewRequest("GET", finalURL, nil)
 		if len(cfg.Sms.BasicAuth) > 0 && strings.Contains(cfg.Sms.BasicAuth, ":") {
 			s := strings.SplitN(cfg.Sms.BasicAuth, ":", 2)
 			if len(s) == 2 {
@@ -42,7 +41,7 @@ func sendCodeByPhoneDo(domain string, client *http.Client, code int32, identity 
 			}
 		}
 		resp, _ := client.Do(req)
-		fmt.Println(resp.Status)
+		log.Println(resp.Status)
 		return
 	}
 	body := cfg.Sms.Body
@@ -67,7 +66,7 @@ func sendCodeByPhoneDo(domain string, client *http.Client, code int32, identity 
 	}
 	//urlStr := domain + "/2010-04-01/Accounts/" + cfg.Sms.TwilioAccount + "/Messages.json"
 	msgDataReader := *strings.NewReader(body)
-	req, _ := http.NewRequest("POST", finalUrl, &msgDataReader)
+	req, _ := http.NewRequest("POST", finalURL, &msgDataReader)
 	if len(cfg.Sms.BasicAuth) > 0 && strings.Contains(cfg.Sms.BasicAuth, ":") {
 		s := strings.SplitN(cfg.Sms.BasicAuth, ":", 2)
 		if len(s) == 2 {
@@ -82,5 +81,5 @@ func sendCodeByPhoneDo(domain string, client *http.Client, code int32, identity 
 	}
 	req.Header.Add("Content-Type", cType)
 	resp, _ := client.Do(req)
-	fmt.Println(resp.Status)
+	log.Println(resp.Status)
 }

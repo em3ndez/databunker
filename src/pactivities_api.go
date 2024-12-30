@@ -2,27 +2,28 @@ package main
 
 import (
 	"fmt"
+	"log"
 	"net/http"
 	"reflect"
 
 	"github.com/julienschmidt/httprouter"
+	"github.com/securitybunker/databunker/src/utils"
 	//"go.mongodb.org/mongo-driver/bson"
 )
 
 func (e mainEnv) pactivityCreate(w http.ResponseWriter, r *http.Request, ps httprouter.Params) {
 	activity := ps.ByName("activity")
-	authResult := e.enforceAdmin(w, r)
-	if authResult == "" {
+	if e.EnforceAdmin(w, r, nil) == "" {
 		return
 	}
-	activity = normalizeBrief(activity)
-	if isValidBrief(activity) == false {
-		returnError(w, r, "bad activity format", 405, nil, nil)
+	activity = utils.NormalizeBrief(activity)
+	if utils.CheckValidBrief(activity) == false {
+		utils.ReturnError(w, r, "bad activity format", 405, nil, nil)
 		return
 	}
-	records, err := getJSONPostMap(r)
+	records, err := utils.GetJSONPostMap(r)
 	if err != nil {
-		returnError(w, r, "failed to decode request body", 405, err, nil)
+		utils.ReturnError(w, r, "failed to decode request body", 405, err, nil)
 		return
 	}
 	defer func() {
@@ -70,13 +71,12 @@ func (e mainEnv) pactivityCreate(w http.ResponseWriter, r *http.Request, ps http
 
 func (e mainEnv) pactivityDelete(w http.ResponseWriter, r *http.Request, ps httprouter.Params) {
 	activity := ps.ByName("activity")
-	authResult := e.enforceAdmin(w, r)
-	if authResult == "" {
+	if e.EnforceAdmin(w, r, nil) == "" {
 		return
 	}
-	activity = normalizeBrief(activity)
-	if isValidBrief(activity) == false {
-		returnError(w, r, "bad activity format", 405, nil, nil)
+	activity = utils.NormalizeBrief(activity)
+	if utils.CheckValidBrief(activity) == false {
+		utils.ReturnError(w, r, "bad activity format", 405, nil, nil)
 		return
 	}
 	e.db.deleteProcessingActivity(activity)
@@ -88,32 +88,31 @@ func (e mainEnv) pactivityDelete(w http.ResponseWriter, r *http.Request, ps http
 func (e mainEnv) pactivityLink(w http.ResponseWriter, r *http.Request, ps httprouter.Params) {
 	activity := ps.ByName("activity")
 	brief := ps.ByName("brief")
-	authResult := e.enforceAdmin(w, r)
-	if authResult == "" {
+	if e.EnforceAdmin(w, r, nil) == "" {
 		return
 	}
-	activity = normalizeBrief(activity)
-	if isValidBrief(activity) == false {
-		returnError(w, r, "bad activity format", 405, nil, nil)
+	activity = utils.NormalizeBrief(activity)
+	if utils.CheckValidBrief(activity) == false {
+		utils.ReturnError(w, r, "bad activity format", 405, nil, nil)
 		return
 	}
-	brief = normalizeBrief(brief)
-	if isValidBrief(brief) == false {
-		returnError(w, r, "bad brief format", 405, nil, nil)
+	brief = utils.NormalizeBrief(brief)
+	if utils.CheckValidBrief(brief) == false {
+		utils.ReturnError(w, r, "bad brief format", 405, nil, nil)
 		return
 	}
 	exists, err := e.db.checkLegalBasis(brief)
 	if err != nil {
-		returnError(w, r, "internal error", 405, nil, nil)
+		utils.ReturnError(w, r, "internal error", 405, nil, nil)
 		return
 	}
 	if exists == false {
-		returnError(w, r, "not found", 405, nil, nil)
+		utils.ReturnError(w, r, "not found", 405, nil, nil)
 		return
 	}
 	_, err = e.db.linkProcessingActivity(activity, brief)
 	if err != nil {
-		returnError(w, r, "internal error", 405, err, nil)
+		utils.ReturnError(w, r, "internal error", 405, err, nil)
 		return
 	}
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
@@ -124,23 +123,22 @@ func (e mainEnv) pactivityLink(w http.ResponseWriter, r *http.Request, ps httpro
 func (e mainEnv) pactivityUnlink(w http.ResponseWriter, r *http.Request, ps httprouter.Params) {
 	activity := ps.ByName("activity")
 	brief := ps.ByName("brief")
-	authResult := e.enforceAdmin(w, r)
-	if authResult == "" {
+	if e.EnforceAdmin(w, r, nil) == "" {
 		return
 	}
-	activity = normalizeBrief(activity)
-	if isValidBrief(activity) == false {
-		returnError(w, r, "bad activity format", 405, nil, nil)
+	activity = utils.NormalizeBrief(activity)
+	if utils.CheckValidBrief(activity) == false {
+		utils.ReturnError(w, r, "bad activity format", 405, nil, nil)
 		return
 	}
-	brief = normalizeBrief(brief)
-	if isValidBrief(brief) == false {
-		returnError(w, r, "bad brief format", 405, nil, nil)
+	brief = utils.NormalizeBrief(brief)
+	if utils.CheckValidBrief(brief) == false {
+		utils.ReturnError(w, r, "bad brief format", 405, nil, nil)
 		return
 	}
 	_, err := e.db.unlinkProcessingActivity(activity, brief)
 	if err != nil {
-		returnError(w, r, "internal error", 405, err, nil)
+		utils.ReturnError(w, r, "internal error", 405, err, nil)
 		return
 	}
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
@@ -149,16 +147,15 @@ func (e mainEnv) pactivityUnlink(w http.ResponseWriter, r *http.Request, ps http
 }
 
 func (e mainEnv) pactivityList(w http.ResponseWriter, r *http.Request, ps httprouter.Params) {
-	authResult := e.enforceAdmin(w, r)
-	if authResult == "" {
+	if e.EnforceAdmin(w, r, nil) == "" {
 		return
 	}
 	resultJSON, numRecords, err := e.db.listProcessingActivities()
 	if err != nil {
-		returnError(w, r, "internal error", 405, err, nil)
+		utils.ReturnError(w, r, "internal error", 405, err, nil)
 		return
 	}
-	fmt.Printf("Total count of rows: %d\n", numRecords)
+	log.Printf("Total count of rows: %d\n", numRecords)
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.WriteHeader(200)
 	str := fmt.Sprintf(`{"status":"ok","total":%d,"rows":%s}`, numRecords, resultJSON)

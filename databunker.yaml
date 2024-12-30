@@ -4,11 +4,15 @@ generic:
   create_user_without_access_token: true
   # use separate app tables, default false
   # use_separate_app_tables: true
+  # specify if API call to list users is available (default false)
+  # list_users: true
+  # disable audit, default false
+  # disable_audit: true
 selfservice:
   # specifies if user can remove himself withour Admin/DPO approval (default false)
-  forget_me: false
+  #forget_me: false
   # specifies if user can change his data without Admin/DPO approval (default false)
-  user_record_change: true
+  #user_record_change: true
   # specifies a list of app-data objects user can change without approval
   app_record_change: ["*"]
 notification:
@@ -18,7 +22,7 @@ notification:
   # - user profile change
   # - consent change
   # user details are send as json data.
-  notification_url: "https://httpbin.org/post"
+  #notification_url: "https://httpbin.org/post"
 policy:
   # max time to store records, untill they are deleted
   max_user_retention_period: "3m"
@@ -60,19 +64,17 @@ server:
   port: 3000
 smtp:
   # You need to get SMTP server to send out email notification for example to allow user login.
-  # You can look for a email service company offering SMTP services. You can pick from here:
-  # https://privacybunker.io/blog/european-cloud-saas-vendors/
   server: "email-smtp-server.com"
   port: 587
   user: "user@your-company.com"
   pass: ""
   sender: "bot@databunker.your-company.com"
 ui:
-  logo_link: "https://logosbynick.com/wp-content/uploads/2018/03/final-logo-example.png"
+  logo_link: "/site/img/logo-example.png"
   company_title: "Your company here"
-  company_link: "https://privacybunker.io/"
+  company_link: "https://databunker.org/"
   term_of_service_title: "Your Terms of service link"
-  term_of_service_link: "https://privacybunker.io/"
+  term_of_service_link: "https://databunker.org/"
   privacy_policy_title: "Your Privacy Policy link"
-  privacy_policy_link: "https://privacybunker.io/"
+  privacy_policy_link: "https://databunker.org/"
   custom_css_link: ""

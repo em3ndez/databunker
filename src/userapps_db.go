@@ -8,7 +8,9 @@ import (
 	"strings"
 
 	jsonpatch "github.com/evanphx/json-patch"
+	"github.com/securitybunker/databunker/src/audit"
 	"github.com/securitybunker/databunker/src/storage"
+	"github.com/securitybunker/databunker/src/utils"
 	"go.mongodb.org/mongo-driver/bson"
 )
 
@@ -17,7 +19,7 @@ func (dbobj dbcon) getUserApp(userTOKEN string, appName string, conf Config) ([]
 	var record bson.M
 	var err error
 	if conf.Generic.UseSeparateAppTables == true {
-		record, err = dbobj.store.GetRecordInTable(appNameFull, "token", userTOKEN)
+		record, err = dbobj.store.GetRecordFromTable(appNameFull, "token", userTOKEN)
 	} else {
 		record, err = dbobj.store.GetRecord2(storage.TblName.Userapps, "token", userTOKEN, "appname", appName)
 	}
@@ -42,7 +44,7 @@ func (dbobj dbcon) deleteUserApp(userTOKEN string, appName string, conf Config) 
 
 func (dbobj dbcon) deleteUserApps(userTOKEN string, conf Config) {
 	if conf.Generic.UseSeparateAppTables == true {
-		userApps, _:= dbobj.listAllAppsOnly(conf)
+		userApps, _ := dbobj.listAllAppsOnly(conf)
 		// delete all user app records
 		for _, appName := range userApps {
 			appNameFull := "app_" + appName
@@ -53,7 +55,7 @@ func (dbobj dbcon) deleteUserApps(userTOKEN string, conf Config) {
 	}
 }
 
-func (dbobj dbcon) createAppRecord(jsonData []byte, userTOKEN string, appName string, event *auditEvent, conf Config) (string, error) {
+func (dbobj dbcon) createAppRecord(jsonData []byte, userTOKEN string, appName string, event *audit.AuditEvent, conf Config) (string, error) {
 	appNameFull := "app_" + appName
 	//log.Printf("Going to create app record: %s\n", appName)
 	encodedStr, err := dbobj.userEncrypt(userTOKEN, jsonData)
@@ -78,13 +80,13 @@ func (dbobj dbcon) createAppRecord(jsonData []byte, userTOKEN string, appName st
 	}
 	//fmt.Println("creating new app")
 	if conf.Generic.UseSeparateAppTables == true {
-		record, err := dbobj.store.GetRecordInTable(appNameFull, "token", userTOKEN)
+		record, err := dbobj.store.GetRecordFromTable(appNameFull, "token", userTOKEN)
 		if err != nil {
 			return userTOKEN, err
 		}
 		if record != nil {
 			_, err = dbobj.store.UpdateRecordInTable(appNameFull, "token", userTOKEN, &bdoc)
-		 } else {
+		} else {
 			_, err = dbobj.store.CreateRecordInTable(appNameFull, bdoc)
 		}
 	} else {
@@ -102,7 +104,7 @@ func (dbobj dbcon) createAppRecord(jsonData []byte, userTOKEN string, appName st
 	return userTOKEN, err
 }
 
-func (dbobj dbcon) updateAppRecord(jsonDataPatch []byte, userTOKEN string, appName string, event *auditEvent, conf Config) (string, error) {
+func (dbobj dbcon) updateAppRecord(jsonDataPatch []byte, userTOKEN string, appName string, event *audit.AuditEvent, conf Config) (string, error) {
 	//_, err = collection.InsertOne(context.TODO(), bson.M{"name": "The Go Language2", "genre": "Coding", "authorId": "4"})
 	appNameFull := "app_" + appName
 	userBson, err := dbobj.lookupUserRecord(userTOKEN)
@@ -118,7 +120,7 @@ func (dbobj dbcon) updateAppRecord(jsonDataPatch []byte, userTOKEN string, appNa
 	}
 	var record bson.M
 	if conf.Generic.UseSeparateAppTables == true {
-		record, err = dbobj.store.GetRecordInTable(appNameFull, "token", userTOKEN)
+		record, err = dbobj.store.GetRecordFromTable(appNameFull, "token", userTOKEN)
 	} else {
 		record, err = dbobj.store.GetRecord2(storage.TblName.Userapps, "token", userTOKEN, "appname", appName)
 	}
@@ -134,7 +136,7 @@ func (dbobj dbcon) updateAppRecord(jsonDataPatch []byte, userTOKEN string, appNa
 	if err != nil {
 		return userTOKEN, err
 	}
-	decrypted, err := decrypt(dbobj.masterKey, recordKey, encData)
+	decrypted, err := utils.Decrypt(dbobj.masterKey, recordKey, encData)
 	if err != nil {
 		return userTOKEN, err
 	}
@@ -156,7 +158,7 @@ func (dbobj dbcon) updateAppRecord(jsonDataPatch []byte, userTOKEN string, appNa
 	}
 	//fmt.Printf("result: %s\n", newJSON)
 	bdoc := bson.M{}
-	encoded, err := encrypt(dbobj.masterKey, recordKey, newJSON)
+	encoded, err := utils.Encrypt(dbobj.masterKey, recordKey, newJSON)
 	if err != nil {
 		return userTOKEN, err
 	}
@@ -208,7 +210,7 @@ func (dbobj dbcon) listUserApps(userTOKEN string, conf Config) ([]byte, error) {
 		var result []string
 		for _, colName := range allCollections {
 			if strings.HasPrefix(colName, "app_") {
-				record, err := dbobj.store.GetRecordInTable(colName, "token", userTOKEN)
+				record, err := dbobj.store.GetRecordFromTable(colName, "token", userTOKEN)
 				if err != nil {
 					return nil, err
 				}
@@ -247,7 +249,7 @@ func (dbobj dbcon) dumpUserApps(userTOKEN string, conf Config) ([]byte, error) {
 		}
 		for _, colName := range allCollections {
 			if strings.HasPrefix(colName, "app_") {
-				record, err := dbobj.store.GetRecordInTable(colName, "token", userTOKEN)
+				record, err := dbobj.store.GetRecordFromTable(colName, "token", userTOKEN)
 				if err != nil {
 					return nil, err
 				}
@@ -257,7 +259,7 @@ func (dbobj dbcon) dumpUserApps(userTOKEN string, conf Config) ([]byte, error) {
 			}
 		}
 	} else {
-		records, err := dbobj.store.GetList(storage.TblName.Userapps, "tone", userTOKEN, 0, 0, "appname")
+		records, err := dbobj.store.GetList(storage.TblName.Userapps, "token", userTOKEN, 0, 0, "appname")
 		if err != nil {
 			return nil, err
 		}

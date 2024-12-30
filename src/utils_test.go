@@ -2,13 +2,15 @@ package main
 
 import (
 	"fmt"
-	"io/ioutil"
+	"io"
+	"log"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 
 	uuid "github.com/hashicorp/go-uuid"
+	"github.com/securitybunker/databunker/src/utils"
 )
 
 func TestUtilUUID(t *testing.T) {
@@ -17,7 +19,7 @@ func TestUtilUUID(t *testing.T) {
 		t.Logf("Checking[%d]: %s\n", id, recordUUID)
 		if err != nil {
 			t.Fatalf("Failed to generate UUID %s: %s ", recordUUID, err)
-		} else if isValidUUID(recordUUID) == false {
+		} else if utils.CheckValidUUID(recordUUID) == false {
 			t.Fatalf("Failed to validate UUID: %s ", recordUUID)
 		}
 	}
@@ -26,13 +28,13 @@ func TestUtilUUID(t *testing.T) {
 func TestUtilAppNames(t *testing.T) {
 	goodApps := []string{"penn", "teller", "a123", "good_app"}
 	for _, value := range goodApps {
-		if isValidApp(value) == false {
+		if utils.CheckValidApp(value) == false {
 			t.Fatalf("Failed to validate good app name: %s ", value)
 		}
 	}
 	badApps := []string{"P1", "4as", "_a", "a.a", "a a", "a!b"}
 	for _, value := range badApps {
-		if isValidApp(value) == true {
+		if utils.CheckValidApp(value) == true {
 			t.Fatalf("Failed to validate bad app name: %s ", value)
 		}
 	}
@@ -50,7 +52,7 @@ func TestUtilStringPatternMatch(t *testing.T) {
 		{"pattern": "*test", "name": "123test", "result": true},
 	}
 	for _, value := range goodJsons {
-		if stringPatternMatch(value["pattern"].(string), value["name"].(string)) != value["result"].(bool) {
+		if utils.StringPatternMatch(value["pattern"].(string), value["name"].(string)) != value["result"].(bool) {
 			t.Fatalf("Failed in %s match %s\n", value["pattern"].(string), value["name"].(string))
 		}
 	}
@@ -66,11 +68,11 @@ func TestUtilGetJSONPost(t *testing.T) {
 	for _, value := range goodJsons {
 		request := httptest.NewRequest("POST", "/user", strings.NewReader(value))
 		request.Header.Set("Content-Type", "application/json")
-		result, err := getJSONPost(request, "IL")
+		result, err := utils.GetUserJSONStruct(request, "IL")
 		if err != nil {
 			t.Fatalf("Failed to parse json: %s, err: %s\n", value, err)
 		}
-		if len(result.loginIdx) == 0 {
+		if len(result.LoginIdx) == 0 {
 			t.Fatalf("Failed to parse login index from json: %s ", value)
 		}
 	}
@@ -82,23 +84,23 @@ func TestUtilGetJSONPost(t *testing.T) {
 	for _, value := range badJsons {
 		request := httptest.NewRequest("POST", "/user", strings.NewReader(value))
 		request.Header.Set("Content-Type", "application/json")
-		result, err := getJSONPost(request, "IL")
+		result, err := utils.GetUserJSONStruct(request, "IL")
 		if err != nil {
 			t.Fatalf("Failed to parse json: %s, err: %s\n", value, err)
 		}
-		if len(result.loginIdx) != 0 {
+		if len(result.LoginIdx) != 0 {
 			t.Fatalf("Failed to parse login index from json: %s ", value)
 		}
 	}
 }
 
 func TestUtilSMS(t *testing.T) {
-	server := httptest.NewServer(reqMiddleware(http.HandlerFunc(func(rw http.ResponseWriter, req *http.Request) {
+	server := httptest.NewServer(e.reqMiddleware(http.HandlerFunc(func(rw http.ResponseWriter, req *http.Request) {
 		rw.Header().Set("Content-Type", "application/json")
 		rw.WriteHeader(200)
 		defer req.Body.Close()
-		bodyBytes, _ := ioutil.ReadAll(req.Body)
-		fmt.Printf("body: %s\n", string(bodyBytes))
+		bodyBytes, _ := io.ReadAll(req.Body)
+		log.Printf("body: %s\n", string(bodyBytes))
 		if string(bodyBytes) != "Body=Data+Bunker+code+1234&From=from1234&To=4444" {
 			t.Fatalf("bad request: %s", string(bodyBytes))
 		}
@@ -108,7 +110,7 @@ func TestUtilSMS(t *testing.T) {
 	client := server.Client()
 	domain := server.URL
 	var cfg Config
-	sendCodeByPhoneDo(domain, client, 1234, "4444", cfg)
+	sendCodeByPhoneDo(domain, client, 1234, "4444", &cfg)
 }
 
 func TestUtilNotifyConsentChange(t *testing.T) {
@@ -117,8 +119,8 @@ func TestUtilNotifyConsentChange(t *testing.T) {
 		rw.Header().Set("Content-Type", "application/json")
 		rw.WriteHeader(200)
 		defer req.Body.Close()
-		bodyBytes, _ := ioutil.ReadAll(req.Body)
-		fmt.Printf("body: %s\n", string(bodyBytes))
+		bodyBytes, _ := io.ReadAll(req.Body)
+		log.Printf("body: %s\n", string(bodyBytes))
 		if string(bodyBytes) != `{"action":"consentchange","brief":"brief","identity":"user3@user3.com","mode":"email","status":"no"}` {
 			q <- fmt.Sprintf("bad request in notifyConsentChange: %s", string(bodyBytes))
 		} else {
@@ -140,8 +142,8 @@ func TestUtilNotifyProfileNew(t *testing.T) {
 		rw.Header().Set("Content-Type", "application/json")
 		rw.WriteHeader(200)
 		defer req.Body.Close()
-		bodyBytes, _ := ioutil.ReadAll(req.Body)
-		fmt.Printf("body: %s\n", string(bodyBytes))
+		bodyBytes, _ := io.ReadAll(req.Body)
+		log.Printf("body: %s\n", string(bodyBytes))
 		if string(bodyBytes) != `{"action":"profilenew","identity":"user3@user3.com","mode":"email","profile":{"name":"alex"}}` {
 			q <- fmt.Sprintf("bad request in notifyConsentChange: %s", string(bodyBytes))
 		} else {
@@ -164,8 +166,8 @@ func TestUtilNotifyForgetMe(t *testing.T) {
 		rw.Header().Set("Content-Type", "application/json")
 		rw.WriteHeader(200)
 		defer req.Body.Close()
-		bodyBytes, _ := ioutil.ReadAll(req.Body)
-		fmt.Printf("body: %s\n", string(bodyBytes))
+		bodyBytes, _ := io.ReadAll(req.Body)
+		log.Printf("body: %s\n", string(bodyBytes))
 		if string(bodyBytes) != `{"action":"forgetme","identity":"user3@user3.com","mode":"email","profile":{"name":"alex"}}` {
 			q <- fmt.Sprintf("bad request in notifyConsentChange: %s", string(bodyBytes))
 		} else {
@@ -188,8 +190,8 @@ func TestUtilNotifyProfileChange(t *testing.T) {
 		rw.Header().Set("Content-Type", "application/json")
 		rw.WriteHeader(200)
 		defer req.Body.Close()
-		bodyBytes, _ := ioutil.ReadAll(req.Body)
-		fmt.Printf("body: %s\n", string(bodyBytes))
+		bodyBytes, _ := io.ReadAll(req.Body)
+		log.Printf("body: %s\n", string(bodyBytes))
 		if string(bodyBytes) != `{"action":"profilechange","identity":"user3@user3.com","mode":"email","old":{"name":"alex2"},"profile":{"name":"alex3"}}` {
 			q <- fmt.Sprintf("bad request in notifyConsentChange: %s", string(bodyBytes))
 		} else {

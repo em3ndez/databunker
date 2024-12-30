@@ -5,20 +5,12 @@ package main
 import (
 	"bytes"
 	"compress/gzip"
-	"context"
-	"crypto/md5"
-	"encoding/hex"
-	"errors"
-	"flag"
-	"fmt"
 	"io"
 	"log"
 	"math/rand"
 	"net/http"
 	"os"
-	"os/signal"
 	"strings"
-	"syscall"
 	"time"
 
 	"github.com/gobuffalo/packr"
@@ -26,10 +18,15 @@ import (
 	"github.com/kelseyhightower/envconfig"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
+	"github.com/securitybunker/databunker/src/audit"
 	"github.com/securitybunker/databunker/src/autocontext"
 	"github.com/securitybunker/databunker/src/storage"
-	yaml "gopkg.in/yaml.v2"
+	"github.com/securitybunker/databunker/src/utils"
+	"go.mongodb.org/mongo-driver/bson"
+	"gopkg.in/yaml.v2"
 )
+
+var version string
 
 type dbcon struct {
 	store     storage.BackendDB
@@ -40,14 +37,16 @@ type dbcon struct {
 // Config is u	sed to store application configuration
 type Config struct {
 	Generic struct {
-		CreateUserWithoutAccessToken	bool   `yaml:"create_user_without_access_token" default:false`
-		UseSeparateAppTables		bool   `yaml:"use_separate_app_tables" default:false`
-		UserRecordSchema		string `yaml:"user_record_schema"`
-		AdminEmail			string `yaml:"admin_email" envconfig:"ADMIN_EMAIL"`
+		CreateUserWithoutAccessToken bool   `yaml:"create_user_without_access_token" default:"false"`
+		UseSeparateAppTables         bool   `yaml:"use_separate_app_tables" default:"false"`
+		UserRecordSchema             string `yaml:"user_record_schema"`
+		DisableAudit                 bool   `yaml:"disable_audit" default:"false"`
+		AdminEmail                   string `yaml:"admin_email" envconfig:"ADMIN_EMAIL"`
+		ListUsers                    bool   `yaml:"list_users" default:"false"`
 	}
 	SelfService struct {
-		ForgetMe	 bool     `yaml:"forget_me" default:false`
-		UserRecordChange bool     `yaml:"user_record_change" default:false`
+		ForgetMe         bool     `yaml:"forget_me" default:"false"`
+		UserRecordChange bool     `yaml:"user_record_change" default:"false"`
 		AppRecordChange  []string `yaml:"app_record_change"`
 	}
 	Notification struct {
@@ -56,9 +55,9 @@ type Config struct {
 		MagicSyncToken  string `yaml:"magic_sync_token"`
 	}
 	Policy struct {
-		MaxUserRetentionPeriod		string `yaml:"max_user_retention_period" default:"1m"`
-		MaxAuditRetentionPeriod		string `yaml:"max_audit_retention_period" default:"12m"`
-		MaxSessionRetentionPeriod	string `yaml:"max_session_retention_period" default:"1h"`
+		MaxUserRetentionPeriod            string `yaml:"max_user_retention_period" default:"1m"`
+		MaxAuditRetentionPeriod           string `yaml:"max_audit_retention_period" default:"12m"`
+		MaxSessionRetentionPeriod         string `yaml:"max_session_retention_period" default:"1h"`
 		MaxShareableRecordRetentionPeriod string `yaml:"max_shareable_record_retention_period" default:"1m"`
 	}
 	Ssl struct {
@@ -66,15 +65,15 @@ type Config struct {
 		SslCertificateKey string `yaml:"ssl_certificate_key" envconfig:"SSL_CERTIFICATE_KEY"`
 	}
 	Sms struct {
-		Url		string `yaml:"url"`
-		From		string `yaml:"from"`
-		Body		string `yaml:"body"`
-		Token		string `yaml:"token"`
-		Method		string `yaml:"method"`
-		BasicAuth	string `yaml:"basic_auth"`
-		ContentType	string `yaml:"content_type"`
-		CustomHeader	string `yaml:"custom_header"`
-		DefaultCountry  string `yaml:"default_country"`
+		URL            string `yaml:"url"`
+		From           string `yaml:"from"`
+		Body           string `yaml:"body"`
+		Token          string `yaml:"token"`
+		Method         string `yaml:"method"`
+		BasicAuth      string `yaml:"basic_auth"`
+		ContentType    string `yaml:"content_type"`
+		CustomHeader   string `yaml:"custom_header"`
+		DefaultCountry string `yaml:"default_country"`
 	}
 	Server struct {
 		Port string `yaml:"port" envconfig:"BUNKER_PORT"`
@@ -88,11 +87,11 @@ type Config struct {
 		Sender string `yaml:"sender" envconfig:"SMTP_SENDER"`
 	} `yaml:"smtp"`
 	UI struct {
-		LogoLink	string `yaml:"logo_link"`
-		CompanyTitle	string `yaml:"company_title"`
-		CompanyVAT	string `yaml:"company_vat"`
-		CompanyCity	string `yaml:"company_city"`
-		CompanyLink	string `yaml:"company_link"`
+		LogoLink           string `yaml:"logo_link"`
+		CompanyTitle       string `yaml:"company_title"`
+		CompanyVAT         string `yaml:"company_vat"`
+		CompanyCity        string `yaml:"company_city"`
+		CompanyLink        string `yaml:"company_link"`
 		CompanyCountry     string `yaml:"company_country"`
 		CompanyAddress     string `yaml:"company_address"`
 		TermOfServiceTitle string `yaml:"term_of_service_title"`
@@ -100,7 +99,7 @@ type Config struct {
 		PrivacyPolicyTitle string `yaml:"privacy_policy_title"`
 		PrivacyPolicyLink  string `yaml:"privacy_policy_link"`
 		CustomCSSLink      string `yaml:"custom_css_link"`
-		MagicLookup	   bool   `yaml:"magic_lookup"`
+		MagicLookup        bool   `yaml:"magic_lookup"`
 	} `yaml:"ui"`
 }
 
@@ -109,16 +108,6 @@ type mainEnv struct {
 	db       *dbcon
 	conf     Config
 	stopChan chan struct{}
-}
-
-// userJSON used to parse user POST
-type userJSON struct {
-	jsonData  []byte
-	loginIdx  string
-	emailIdx  string
-	phoneIdx  string
-	customIdx string
-	token     string
 }
 
 type tokenAuthResult struct {
@@ -157,7 +146,7 @@ func (e mainEnv) metrics(w http.ResponseWriter, r *http.Request, ps httprouter.P
 
 // backupDB API call.
 func (e mainEnv) backupDB(w http.ResponseWriter, r *http.Request, ps httprouter.Params) {
-	if e.enforceAuth(w, r, nil) == "" {
+	if e.EnforceAuth(w, r, nil) == "" {
 		return
 	}
 	w.WriteHeader(200)
@@ -175,6 +164,33 @@ func (e mainEnv) checkStatus(w http.ResponseWriter, r *http.Request, ps httprout
 	}
 }
 
+// ReadConfFile() read configuration file.
+func ReadConfFile(cfg *Config, filepath *string) error {
+	confFile := "databunker.yaml"
+	if filepath != nil {
+		if len(*filepath) > 0 {
+			confFile = *filepath
+		}
+	}
+	log.Printf("Loading configuration file: %s\n", confFile)
+	f, err := os.Open(confFile)
+	if err != nil {
+		return err
+	}
+	decoder := yaml.NewDecoder(f)
+	err = decoder.Decode(cfg)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+// readEnv() process environment variables.
+func ReadEnv(cfg *Config) error {
+	err := envconfig.Process("", cfg)
+	return err
+}
+
 // setupRouter() setup HTTP Router object.
 func (e mainEnv) setupRouter() *httprouter.Router {
 	box := packr.NewBox("../ui")
@@ -182,11 +198,14 @@ func (e mainEnv) setupRouter() *httprouter.Router {
 	router := httprouter.New()
 
 	router.GET("/v1/status", e.checkStatus)
+	router.GET("/v1/status/", e.checkStatus)
 	router.GET("/status", e.checkStatus)
+	router.GET("/status/", e.checkStatus)
 
 	router.GET("/v1/sys/backup", e.backupDB)
 
 	router.POST("/v1/user", e.userCreate)
+	router.POST("/v1/users", e.userList)
 	router.GET("/v1/user/:mode/:identity", e.userGet)
 	router.DELETE("/v1/user/:mode/:identity", e.userDelete)
 	router.PUT("/v1/user/:mode/:identity", e.userChange)
@@ -200,7 +219,7 @@ func (e mainEnv) setupRouter() *httprouter.Router {
 	router.POST("/v1/exp/start/:mode/:identity", e.expStart)
 	router.DELETE("/v1/exp/cancel/:mode/:identity", e.expCancel)
 
-	router.POST("/v1/sharedrecord/token/:token", e.newSharedRecord)
+	router.POST("/v1/sharedrecord/:mode/:identity", e.newSharedRecord)
 	router.GET("/v1/get/:record", e.getRecord)
 
 	router.GET("/v1/request/:request", e.getUserRequest)
@@ -228,11 +247,11 @@ func (e mainEnv) setupRouter() *httprouter.Router {
 	//router.GET("/v1/consent/:mode/:identity", e.consentAllUserRecords)
 	//router.GET("/v1/consent/:mode/:identity/:brief", e.consentUserRecord)
 
-	router.POST("/v1/userapp/token/:token/:appname", e.userappNew)
-	router.GET("/v1/userapp/token/:token/:appname", e.userappGet)
-	router.PUT("/v1/userapp/token/:token/:appname", e.userappChange)
-	router.DELETE("/v1/userapp/token/:token/:appname", e.userappDelete)
-	router.GET("/v1/userapp/token/:token", e.userappList)
+	router.POST("/v1/userapp/:mode/:identity/:appname", e.userappNew)
+	router.GET("/v1/userapp/:mode/:identity/:appname", e.userappGet)
+	router.PUT("/v1/userapp/:mode/:identity/:appname", e.userappChange)
+	router.DELETE("/v1/userapp/:mode/:identity/:appname", e.userappDelete)
+	router.GET("/v1/userapp/:mode/:identity", e.userappList)
 	router.GET("/v1/userapps", e.appList)
 
 	router.GET("/v1/session/:session", e.getSession)
@@ -256,14 +275,27 @@ func (e mainEnv) setupRouter() *httprouter.Router {
 			log.Printf("error: %s\n", err.Error())
 			w.WriteHeader(404)
 		} else {
-			w.WriteHeader(200)
 			captcha, err := generateCaptcha()
 			if err != nil {
 				w.WriteHeader(501)
 			} else {
 				data2 := bytes.ReplaceAll(data, []byte("%CAPTCHAURL%"), []byte(captcha))
+				w.Header().Set("Content-Type", "text/html; charset=utf-8")
+				w.WriteHeader(200)
 				w.Write(data2)
 			}
+		}
+	})
+	router.GET("/robots.txt", func(w http.ResponseWriter, r *http.Request, ps httprouter.Params) {
+		data, err := box.Find("robots.txt")
+		if err != nil {
+			//log.Panic("error %s", err.Error())
+			log.Printf("error: %s\n", err.Error())
+			w.WriteHeader(404)
+		} else {
+			w.Header().Set("Content-Type", "text/plain")
+			w.WriteHeader(200)
+			w.Write(data)
 		}
 	})
 	router.GET("/site/*filepath", func(w http.ResponseWriter, r *http.Request, ps httprouter.Params) {
@@ -282,10 +314,24 @@ func (e mainEnv) setupRouter() *httprouter.Router {
 				w.Header().Set("Content-Type", "text/javascript")
 			} else if strings.HasSuffix(r.URL.Path, ".svg") {
 				w.Header().Set("Content-Type", "image/svg+xml")
+			} else if strings.HasSuffix(r.URL.Path, ".png") {
+				w.Header().Set("Content-Type", "image/png")
+			} else if strings.HasSuffix(r.URL.Path, ".woff2") {
+				w.Header().Set("Content-Type", "font/woff2")
+			} else if strings.HasSuffix(r.URL.Path, ".html") {
+				w.Header().Set("Content-Type", "text/html; charset=utf-8")
 			}
 			// next step: https://www.sanarias.com/blog/115LearningHTTPcachinginGo
 			w.Header().Set("Cache-Control", "public, max-age=7776000")
 			w.WriteHeader(200)
+			if strings.HasSuffix(r.URL.Path, ".js") || strings.HasSuffix(r.URL.Path, ".html") {
+				if bytes.Contains(data, []byte("%IPCOUNTRY%")) {
+					ipCountry := getCountry(r)
+					data2 := bytes.ReplaceAll(data, []byte("%IPCOUNTRY%"), []byte(ipCountry))
+					w.Write([]byte(data2))
+					return
+				}
+			}
 			w.Write([]byte(data))
 		}
 	})
@@ -308,37 +354,10 @@ func (e mainEnv) setupRouter() *httprouter.Router {
 	return router
 }
 
-// readConfFile() read configuration file.
-func readConfFile(cfg *Config, filepath *string) error {
-	confFile := "databunker.yaml"
-	if filepath != nil {
-		if len(*filepath) > 0 {
-			confFile = *filepath
-		}
-	}
-	fmt.Printf("Databunker configuration file is: %s\n", confFile)
-	f, err := os.Open(confFile)
-	if err != nil {
-		return err
-	}
-	decoder := yaml.NewDecoder(f)
-	err = decoder.Decode(cfg)
-	if err != nil {
-		return err
-	}
-	return nil
-}
-
-// readEnv() process environment variables.
-func readEnv(cfg *Config) error {
-	err := envconfig.Process("", cfg)
-	return err
-}
-
 // dbCleanup() is used to run cron jobs.
 func (e mainEnv) dbCleanupDo() {
 	log.Printf("db cleanup timeout\n")
-	exp, _ := parseExpiration0(e.conf.Policy.MaxAuditRetentionPeriod)
+	exp, _ := utils.ParseExpiration0(e.conf.Policy.MaxAuditRetentionPeriod)
 	if exp > 0 {
 		e.db.store.DeleteExpired0(storage.TblName.Audit, exp)
 	}
@@ -362,6 +381,30 @@ func (e mainEnv) dbCleanup() {
 			}
 		}
 	}()
+}
+
+// helper function to load user details by idex name
+func (e mainEnv) loadUserToken(w http.ResponseWriter, r *http.Request, mode string, identity string, event *audit.AuditEvent) string {
+	var err error
+	if utils.ValidateMode(mode) == false {
+		utils.ReturnError(w, r, "bad mode", 405, nil, event)
+		return ""
+	}
+	var userBson bson.M
+	if mode == "token" {
+		if utils.EnforceUUID(w, identity, event) == false {
+			return ""
+		}
+		userBson, err = e.db.lookupUserRecord(identity)
+	} else {
+		userBson, err = e.db.lookupUserRecordByIndex(mode, identity, e.conf)
+	}
+	if userBson == nil || err != nil {
+		utils.ReturnError(w, r, "internal error", 405, nil, event)
+		return ""
+	}
+	event.Record = userBson["token"].(string)
+	return event.Record
 }
 
 // CustomResponseWriter struct is a custom wrapper for ResponseWriter
@@ -398,13 +441,19 @@ func (w *CustomResponseWriter) WriteHeader(statusCode int) {
 	w.w.WriteHeader(statusCode)
 }
 
-var HealthCheckerCounter = 0
+var statusCounter = 0
+var statusErrorCounter = 0
 
-func reqMiddleware(handler http.Handler) http.Handler {
+func (e mainEnv) reqMiddleware(handler http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		//log.Printf("Set host %s\n", r.Host)
-		autocontext.Set(r, "host", r.Host)
+		e.initContext(r)
 		w.Header().Set("Access-Control-Allow-Origin", "*")
+		w.Header().Set("X-Frame-Options", "SAMEORIGIN")
+		w.Header().Set("Strict-Transport-Security", "max-age=31536000; includeSubDomains; preload")
+		w.Header().Set("Content-Security-Policy", "default-src 'self' http: https: data: blob: 'unsafe-inline'")
+		w.Header().Set("X-XSS-Protection", "1; mode=block")
+		w.Header().Set("X-Content-Type-Options", "nosniff")
 		w2 := NewCustomResponseWriter(w)
 		if strings.Contains(r.Header.Get("Accept-Encoding"), "gzip") {
 			w2.Header().Set("Vary", "Accept-Encoding")
@@ -415,200 +464,34 @@ func reqMiddleware(handler http.Handler) http.Handler {
 		}
 		handler.ServeHTTP(w2, r)
 		autocontext.Clean(r)
-		if r.Header.Get("User-Agent") == "ELB-HealthChecker/2.0" && r.URL.RequestURI() == "/" && r.Method == "GET" {
-			if HealthCheckerCounter == 0 {
-				log.Printf("%d %s %s skiping %s\n", w2.Code, r.Method, r.URL, r.Header.Get("User-Agent"))
-				HealthCheckerCounter = 1
-			} else if HealthCheckerCounter == 100 {
-				HealthCheckerCounter = 0
+		URL := r.URL.String()
+		if r.Method == "GET" && (URL == "/status" || URL == "/status/" || URL == "/v1/status" || URL == "/v1/status/") {
+			if w2.Code == 200 {
+				if statusCounter < 2 {
+					log.Printf("%d %s %s\n", w2.Code, r.Method, r.URL)
+				} else if statusCounter == 2 {
+					log.Printf("%d %s %s 'ignore subsequent /status requests'\n", w2.Code, r.Method, r.URL)
+				}
+				statusCounter = statusCounter + 1
 			} else {
-				HealthCheckerCounter = HealthCheckerCounter + 1
+				if statusErrorCounter < 2 {
+					log.Printf("%d %s %s\n", w2.Code, r.Method, r.URL)
+				} else if statusErrorCounter == 2 {
+					log.Printf("%d %s %s 'ignore subsequent errors in /status requests'\n", w2.Code, r.Method, r.URL)
+				}
+				statusErrorCounter = statusErrorCounter + 1
 			}
 		} else {
+			statusCounter = 0
+			statusErrorCounter = 0
 			log.Printf("%d %s %s\n", w2.Code, r.Method, r.URL)
 		}
 	})
 }
 
-func setupDB(dbPtr *string, masterKeyPtr *string, customRootToken string) (*dbcon, string, error) {
-	fmt.Printf("\nDatabunker init\n\n")
-	var masterKey []byte
-	var err error
-	if variableProvided("DATABUNKER_MASTERKEY", masterKeyPtr) == true {
-		masterKey, err = masterkeyGet(masterKeyPtr)
-		if err != nil {
-			fmt.Printf("Failed to parse master key: %s", err)
-			os.Exit(0)
-		}
-		fmt.Printf("Master key: ****\n\n")
-	} else {
-		masterKey, err = generateMasterKey()
-		if err != nil {
-			fmt.Printf("Failed to generate master key: %s", err)
-			os.Exit(0)
-		}
-		fmt.Printf("Master key: %x\n\n", masterKey)
-	}
-	hash := md5.Sum(masterKey)
-	fmt.Printf("Init database\n\n")
-	store, err := storage.InitDB(dbPtr)
-	for num_attempts := 60; err != nil && num_attempts > 0; num_attempts-- {
-		time.Sleep(1 * time.Second)
-		fmt.Printf("Trying to init db: %d\n", 61-num_attempts)
-		store, err = storage.InitDB(dbPtr)
-	}
-	if err != nil {
-		//log.Panic("error %s", err.Error())
-		log.Fatalf("Databunker failed to init database, error %s\n\n", err.Error())
-		os.Exit(0)
-	}
-	db := &dbcon{store, masterKey, hash[:]}
-	rootToken, err := db.createRootXtoken(customRootToken)
-	if err != nil {
-		//log.Panic("error %s", err.Error())
-		fmt.Printf("error %s", err.Error())
-	}
-	log.Println("Creating default entities: core-send-email-on-login and core-send-sms-on-login")
-	db.createLegalBasis("core-send-email-on-login", "", "login", "Send email on login",
-		"Confirm to allow sending access code using 3rd party email gateway", "consent",
-		"This consent is required to give you our service.", "active", true, true)
-	db.createLegalBasis("core-send-sms-on-login", "", "login", "Send SMS on login",
-		"Confirm to allow sending access code using 3rd party SMS gateway", "consent",
-		"This consent is required to give you our service.", "active", true, true)
-	fmt.Printf("\nAPI Root token: %s\n\n", rootToken)
-	return db, rootToken, err
-}
-
-func variableProvided(vname string, masterKeyPtr *string) bool {
-	if masterKeyPtr != nil && len(*masterKeyPtr) > 0 {
-		return true
-	}
-	if len(os.Getenv(vname)) > 0 {
-		return true
-	}
-	return false
-}
-
-func masterkeyGet(masterKeyPtr *string) ([]byte, error) {
-	masterKeyStr := ""
-	if masterKeyPtr != nil && len(*masterKeyPtr) > 0 {
-		masterKeyStr = *masterKeyPtr
-	} else {
-		masterKeyStr = os.Getenv("DATABUNKER_MASTERKEY")
-	}
-	if len(masterKeyStr) == 0 {
-		return nil, errors.New("Master key environment variable/parameter is missing")
-	}
-	if len(masterKeyStr) != 48 {
-		return nil, errors.New("Master key length is wrong")
-	}
-	if isValidHex(masterKeyStr) == false {
-		return nil, errors.New("Master key is not valid hex string")
-	}
-	masterKey, err := hex.DecodeString(masterKeyStr)
-	if err != nil {
-		return nil, errors.New("Failed to decode master key")
-	}
-	return masterKey, nil
-}
-
 // main application function
 func main() {
 	rand.Seed(time.Now().UnixNano())
-	lockMemory()
-	initPtr := flag.Bool("init", false, "Generate master key and init database")
-	demoPtr := flag.Bool("demoinit", false, "Generate master key with a DEMO root access token")
-	startPtr := flag.Bool("start", false, "Start databunker service. Provide additional --masterkey value or set it up using evironment variable: DATABUNKER_MASTERKEY")
-	masterKeyPtr := flag.String("masterkey", "", "Specify master key - main database encryption key")
-	dbPtr := flag.String("db", "databunker", "Specify database name/file")
-	confPtr := flag.String("conf", "", "Configuration file name to use")
-	rootTokenKeyPtr := flag.String("roottoken", "", "Specify custom root token to use during database init. It must be in UUID format.")
-	flag.Parse()
-
-	var cfg Config
-	readConfFile(&cfg, confPtr)
-	readEnv(&cfg)
-	customRootToken := ""
-	if *demoPtr {
-		customRootToken = "DEMO"
-	} else if variableProvided("DATABUNKER_ROOTTOKEN", rootTokenKeyPtr) == true {
-		if rootTokenKeyPtr != nil && len(*rootTokenKeyPtr) > 0 {
-			customRootToken = *rootTokenKeyPtr
-		} else {
-			customRootToken = os.Getenv("DATABUNKER_ROOTTOKEN")
-		}
-	}
-	if *initPtr || *demoPtr {
-		if storage.DBExists(dbPtr) == true {
-			fmt.Printf("\nDatabase is alredy initialized.\n\n")
-		} else {
-			db, _, _ := setupDB(dbPtr, masterKeyPtr, customRootToken)
-			db.store.CloseDB()
-		}
-		os.Exit(0)
-	}
-	db_flag := storage.DBExists(dbPtr)
-	for num_attempts := 60; db_flag == false && num_attempts > 0; num_attempts-- {
-		time.Sleep(1 * time.Second)
-		fmt.Printf("Trying to open db: %d\n", 61-num_attempts)
-		db_flag = storage.DBExists(dbPtr)
-	}
-	if db_flag == false {
-		fmt.Printf("\nDatabase is not initialized.\n\n")
-		fmt.Println(`Run "databunker -init" for the first time to generate keys and init database.`)
-		fmt.Println("")
-		os.Exit(0)
-	}
-	if masterKeyPtr == nil && *startPtr == false {
-		fmt.Println("")
-		fmt.Println(`Run "databunker -start" will load DATABUNKER_MASTERKEY environment variable.`)
-		fmt.Println(`For testing "databunker -masterkey MASTER_KEY_VALUE" can be used. Not recommended for production.`)
-		fmt.Println("")
-		os.Exit(0)
-	}
-	err := loadUserSchema(cfg, confPtr)
-	if err != nil {
-		fmt.Printf("Failed to load user schema: %s\n", err)
-		os.Exit(0)
-	}
-	masterKey, masterKeyErr := masterkeyGet(masterKeyPtr)
-	if masterKeyErr != nil {
-		log.Printf("Error: %s", masterKeyErr)
-		os.Exit(0)
-	}
-	store, _ := storage.OpenDB(dbPtr)
-	hash := md5.Sum(masterKey)
-	db := &dbcon{store, masterKey, hash[:]}
-	e := mainEnv{db, cfg, make(chan struct{})}
-	e.dbCleanup()
-	initCaptcha(hash)
-	router := e.setupRouter()
-	router = e.setupConfRouter(router)
-	srv := &http.Server{Addr: cfg.Server.Host + ":" + cfg.Server.Port, Handler: reqMiddleware(router)}
-
-	stop := make(chan os.Signal, 2)
-	signal.Notify(stop, os.Interrupt, syscall.SIGTERM)
-	// Waiting for SIGINT (pkill -2)
-	go func() {
-		<-stop
-		log.Println("Closing app...")
-		close(e.stopChan)
-		time.Sleep(1 * time.Second)
-		srv.Shutdown(context.TODO())
-		db.store.CloseDB()
-	}()
-
-	if _, err := os.Stat(cfg.Ssl.SslCertificate); !os.IsNotExist(err) {
-		log.Printf("Loading ssl\n")
-		err := srv.ListenAndServeTLS(cfg.Ssl.SslCertificate, cfg.Ssl.SslCertificateKey)
-		if err != nil {
-			log.Printf("ListenAndServeSSL: %s\n", err)
-		}
-	} else {
-		log.Println("Loading server")
-		err := srv.ListenAndServe()
-		if err != nil {
-			log.Printf("ListenAndServe(): %s\n", err)
-		}
-	}
+	utils.LockMemory()
+	loadService()
 }

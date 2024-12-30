@@ -12,8 +12,8 @@ import (
 	"strings"
 	"time"
 
-	_ "github.com/mattn/go-sqlite3" // load sqlite3 here
-	"github.com/schollz/sqlite3dump"
+	_ "modernc.org/sqlite"
+	//"github.com/schollz/sqlite3dump"
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/bson/primitive"
 )
@@ -41,7 +41,7 @@ func (dbobj SQLiteDB) DBExists(filepath *string) bool {
 	if _, err := os.Stat(dbfile); os.IsNotExist(err) {
 		return false
 	}
-	db, err := sql.Open("sqlite3", "file:"+dbfile+"?_journal_mode=WAL")
+	db, err := sql.Open("sqlite", "file:"+dbfile+"?_journal_mode=WAL")
 	if err != nil {
 		return false
 	}
@@ -77,7 +77,7 @@ func (dbobj *SQLiteDB) OpenDB(filepath *string) error {
 	if len(dbfile) >= 3 && dbfile[len(dbfile)-3:] != ".db" {
 		dbfile = dbfile + ".db"
 	}
-	fmt.Printf("Databunker db file is: %s\n", dbfile)
+	log.Printf("Database file: %s\n", dbfile)
 	// collect list of all tables
 	/*
 		if _, err := os.Stat(dbfile); !os.IsNotExist(err) {
@@ -95,7 +95,7 @@ func (dbobj *SQLiteDB) OpenDB(filepath *string) error {
 
 	//ql.RegisterDriver2()
 	//db, err := sql.Open("ql2", dbfile)
-	db, err := sql.Open("sqlite3", "file:"+dbfile+"?_journal_mode=WAL")
+	db, err := sql.Open("sqlite", "file:"+dbfile+"?_journal_mode=WAL")
 	if err != nil {
 		log.Fatalf("Failed to open databunker.db file: %s", err)
 		return err
@@ -124,7 +124,7 @@ func (dbobj *SQLiteDB) OpenDB(filepath *string) error {
 		knownApps = append(knownApps, t)
 	}
 	tx.Commit()
-	log.Printf("List of tables: %s\n", knownApps)
+	log.Printf("Found tables: %s\n", knownApps)
 	return nil
 }
 
@@ -139,8 +139,8 @@ func (dbobj *SQLiteDB) InitDB(filepath *string) error {
 	if len(dbfile) >= 3 && dbfile[len(dbfile)-3:] != ".db" {
 		dbfile = dbfile + ".db"
 	}
-	log.Printf("Init Databunker db file is: %s\n", dbfile)
-	db, err := sql.Open("sqlite3", "file:"+dbfile+"?_journal_mode=WAL")
+	log.Printf("Create database file: %s\n", dbfile)
+	db, err := sql.Open("sqlite", "file:"+dbfile+"?_journal_mode=WAL")
 	if err != nil {
 		return err
 	}
@@ -174,13 +174,16 @@ func (dbobj *SQLiteDB) CloseDB() {
 	}
 }
 
-// BackupDB function backups existing databsae and prints database structure to http.ResponseWriter
+// BackupDB function backups existing database and prints database structure to http.ResponseWriter
 func (dbobj SQLiteDB) BackupDB(w http.ResponseWriter) {
-	err := sqlite3dump.DumpDB(dbobj.db, w)
-	if err != nil {
-		w.WriteHeader(http.StatusInternalServerError)
-		log.Printf("error in backup: %s", err)
-	}
+	/*
+	   err := sqlite3dump.DumpDB(dbobj.db, w)
+
+	   	if err != nil {
+	   		w.WriteHeader(http.StatusInternalServerError)
+	   		log.Printf("error in backup: %s", err)
+	   	}
+	*/
 }
 
 func (dbobj SQLiteDB) escapeName(name string) string {
@@ -231,35 +234,21 @@ func (dbobj SQLiteDB) decodeFieldsValues(data interface{}) (string, []interface{
 	return fields, values
 }
 
-func (dbobj SQLiteDB) decodeForCleanup(data interface{}) string {
+func (dbobj SQLiteDB) decodeForCleanup(bdel []string) string {
 	fields := ""
-
-	switch t := data.(type) {
-	case primitive.M:
-		for idx := range data.(primitive.M) {
+	if bdel != nil {
+		for _, colname := range bdel {
 			if len(fields) == 0 {
-				fields = dbobj.escapeName(idx) + "=null"
+				fields = dbobj.escapeName(colname) + "=null"
 			} else {
-				fields = fields + "," + dbobj.escapeName(idx) + "=null"
+				fields = fields + "," + dbobj.escapeName(colname) + "=null"
 			}
 		}
-		return fields
-	case map[string]interface{}:
-		for idx := range data.(map[string]interface{}) {
-			if len(fields) == 0 {
-				fields = dbobj.escapeName(idx) + "=null"
-			} else {
-				fields = fields + "," + dbobj.escapeName(idx) + "=null"
-			}
-		}
-	default:
-		log.Printf("decodeForCleanup: wrong type: %s\n", t)
 	}
-
 	return fields
 }
 
-func (dbobj SQLiteDB) decodeForUpdate(bdoc *bson.M, bdel *bson.M) (string, []interface{}) {
+func (dbobj SQLiteDB) decodeForUpdate(bdoc *bson.M, bdel []string) (string, []interface{}) {
 	values := make([]interface{}, 0)
 	fields := ""
 
@@ -282,11 +271,11 @@ func (dbobj SQLiteDB) decodeForUpdate(bdoc *bson.M, bdel *bson.M) (string, []int
 	}
 
 	if bdel != nil {
-		for idx := range *bdel {
+		for _, colname := range bdel {
 			if len(fields) == 0 {
-				fields = dbobj.escapeName(idx) + "=null"
+				fields = dbobj.escapeName(colname) + "=null"
 			} else {
-				fields = fields + "," + dbobj.escapeName(idx) + "=null"
+				fields = fields + "," + dbobj.escapeName(colname) + "=null"
 			}
 		}
 	}
@@ -395,7 +384,7 @@ func (dbobj SQLiteDB) UpdateRecordInTable(table string, keyName string, keyValue
 
 // UpdateRecord2 updates database record
 func (dbobj SQLiteDB) UpdateRecord2(t Tbl, keyName string, keyValue string,
-	keyName2 string, keyValue2 string, bdoc *bson.M, bdel *bson.M) (int64, error) {
+	keyName2 string, keyValue2 string, bdoc *bson.M, bdel []string) (int64, error) {
 	table := GetTable(t)
 	filter := dbobj.escapeName(keyName) + "=\"" + keyValue + "\" AND " +
 		dbobj.escapeName(keyName2) + "=\"" + keyValue2 + "\""
@@ -404,13 +393,13 @@ func (dbobj SQLiteDB) UpdateRecord2(t Tbl, keyName string, keyValue string,
 
 // UpdateRecordInTable2 updates database record
 func (dbobj SQLiteDB) UpdateRecordInTable2(table string, keyName string,
-	keyValue string, keyName2 string, keyValue2 string, bdoc *bson.M, bdel *bson.M) (int64, error) {
+	keyValue string, keyName2 string, keyValue2 string, bdoc *bson.M, bdel []string) (int64, error) {
 	filter := dbobj.escapeName(keyName) + "=\"" + keyValue + "\" AND " +
 		dbobj.escapeName(keyName2) + "=\"" + keyValue2 + "\""
 	return dbobj.updateRecordInTableDo(table, filter, bdoc, bdel)
 }
 
-func (dbobj SQLiteDB) updateRecordInTableDo(table string, filter string, bdoc *bson.M, bdel *bson.M) (int64, error) {
+func (dbobj SQLiteDB) updateRecordInTableDo(table string, filter string, bdoc *bson.M, bdel []string) (int64, error) {
 	op, values := dbobj.decodeForUpdate(bdoc, bdel)
 	q := "update " + table + " SET " + op + " WHERE " + filter
 	//fmt.Printf("q: %s\n", q)
@@ -445,7 +434,7 @@ func (dbobj SQLiteDB) LookupRecord(t Tbl, row bson.M) (bson.M, error) {
 		values = append(values, keyValue)
 		num = num + 1
 	}
-	return dbobj.getRecordInTableDo(q, values)
+	return dbobj.getOneRecord(q, values)
 }
 
 // GetRecord returns specific record from database
@@ -454,15 +443,15 @@ func (dbobj SQLiteDB) GetRecord(t Tbl, keyName string, keyValue string) (bson.M,
 	q := "select * from " + table + " WHERE " + dbobj.escapeName(keyName) + "=$1"
 	values := make([]interface{}, 0)
 	values = append(values, keyValue)
-	return dbobj.getRecordInTableDo(q, values)
+	return dbobj.getOneRecord(q, values)
 }
 
-// GetRecordInTable returns specific record from database
-func (dbobj SQLiteDB) GetRecordInTable(table string, keyName string, keyValue string) (bson.M, error) {
+// GetRecordFromTable returns specific record from database
+func (dbobj SQLiteDB) GetRecordFromTable(table string, keyName string, keyValue string) (bson.M, error) {
 	q := "select * from " + table + " WHERE " + dbobj.escapeName(keyName) + "=$1"
 	values := make([]interface{}, 0)
 	values = append(values, keyValue)
-	return dbobj.getRecordInTableDo(q, values)
+	return dbobj.getOneRecord(q, values)
 }
 
 // GetRecord2  returns specific record from database
@@ -474,10 +463,10 @@ func (dbobj SQLiteDB) GetRecord2(t Tbl, keyName string, keyValue string,
 	values := make([]interface{}, 0)
 	values = append(values, keyValue)
 	values = append(values, keyValue2)
-	return dbobj.getRecordInTableDo(q, values)
+	return dbobj.getOneRecord(q, values)
 }
 
-func (dbobj SQLiteDB) getRecordInTableDo(q string, values []interface{}) (bson.M, error) {
+func (dbobj SQLiteDB) getOneRecord(q string, values []interface{}) (bson.M, error) {
 	//fmt.Printf("query: %s\n", q)
 
 	tx, err := dbobj.db.Begin()
@@ -487,7 +476,7 @@ func (dbobj SQLiteDB) getRecordInTableDo(q string, values []interface{}) (bson.M
 	defer tx.Rollback()
 	rows, err := tx.Query(q, values...)
 	if err == sql.ErrNoRows {
-		log.Println("nothing found")
+		log.Println("Nothing found")
 		return nil, nil
 	} else if err != nil {
 		return nil, err
@@ -688,9 +677,9 @@ func (dbobj SQLiteDB) DeleteExpired(t Tbl, keyName string, keyValue string) (int
 }
 
 // CleanupRecord nullifies specific feilds in records in database
-func (dbobj SQLiteDB) CleanupRecord(t Tbl, keyName string, keyValue string, data interface{}) (int64, error) {
+func (dbobj SQLiteDB) CleanupRecord(t Tbl, keyName string, keyValue string, bdel []string) (int64, error) {
 	tbl := GetTable(t)
-	cleanup := dbobj.decodeForCleanup(data)
+	cleanup := dbobj.decodeForCleanup(bdel)
 	q := "update " + tbl + " SET " + cleanup + " WHERE " + dbobj.escapeName(keyName) + "=$1"
 	log.Printf("q: %s\n", q)
 
@@ -711,7 +700,7 @@ func (dbobj SQLiteDB) CleanupRecord(t Tbl, keyName string, keyValue string, data
 }
 
 // GetExpiring get records that are expiring
-func (dbobj SQLiteDB) GetExpiring(t Tbl, keyName string, keyValue string) ([]bson.M, error) {
+func (dbobj SQLiteDB) GetExpiring(t Tbl, keyName string, keyValue string) ([]map[string]interface{}, error) {
 	table := GetTable(t)
 	now := int32(time.Now().Unix())
 	q := fmt.Sprintf("select * from %s WHERE endtime>0 AND endtime<%d AND %s=$1",
@@ -723,7 +712,7 @@ func (dbobj SQLiteDB) GetExpiring(t Tbl, keyName string, keyValue string) ([]bso
 }
 
 // GetUniqueList returns a unique list of values from specific column in database
-func (dbobj SQLiteDB) GetUniqueList(t Tbl, keyName string) ([]bson.M, error) {
+func (dbobj SQLiteDB) GetUniqueList(t Tbl, keyName string) ([]map[string]interface{}, error) {
 	table := GetTable(t)
 	keyName = dbobj.escapeName(keyName)
 	q := "select distinct " + keyName + " from " + table + " ORDER BY " + keyName
@@ -733,7 +722,7 @@ func (dbobj SQLiteDB) GetUniqueList(t Tbl, keyName string) ([]bson.M, error) {
 }
 
 // GetList is used to return list of rows. It can be used to return values using pager.
-func (dbobj SQLiteDB) GetList0(t Tbl, start int32, limit int32, orderField string) ([]bson.M, error) {
+func (dbobj SQLiteDB) GetList0(t Tbl, start int32, limit int32, orderField string) ([]map[string]interface{}, error) {
 	table := GetTable(t)
 	if limit > 100 {
 		limit = 100
@@ -755,7 +744,7 @@ func (dbobj SQLiteDB) GetList0(t Tbl, start int32, limit int32, orderField strin
 }
 
 // GetList is used to return list of rows. It can be used to return values using pager.
-func (dbobj SQLiteDB) GetList(t Tbl, keyName string, keyValue string, start int32, limit int32, orderField string) ([]bson.M, error) {
+func (dbobj SQLiteDB) GetList(t Tbl, keyName string, keyValue string, start int32, limit int32, orderField string) ([]map[string]interface{}, error) {
 	table := GetTable(t)
 	if limit > 100 {
 		limit = 100
@@ -777,7 +766,7 @@ func (dbobj SQLiteDB) GetList(t Tbl, keyName string, keyValue string, start int3
 	return dbobj.getListDo(q, values)
 }
 
-func (dbobj SQLiteDB) getListDo(q string, values []interface{}) ([]bson.M, error) {
+func (dbobj SQLiteDB) getListDo(q string, values []interface{}) ([]map[string]interface{}, error) {
 	tx, err := dbobj.db.Begin()
 	if err != nil {
 		return nil, err
@@ -785,7 +774,7 @@ func (dbobj SQLiteDB) getListDo(q string, values []interface{}) ([]bson.M, error
 	defer tx.Rollback()
 	rows, err := tx.Query(q, values...)
 	if err == sql.ErrNoRows {
-		log.Println("nothing found")
+		log.Println("Nothing found")
 		return nil, nil
 	} else if err != nil {
 		return nil, err
@@ -800,11 +789,11 @@ func (dbobj SQLiteDB) getListDo(q string, values []interface{}) ([]bson.M, error
 	if err := rows.Err(); err != nil {
 		log.Fatal(err)
 	}
-	var results []bson.M
+	var results []map[string]interface{}
 	//pointers := make([]interface{}, len(columnNames))
 	//rows.Next()
 	for rows.Next() {
-		recBson := bson.M{}
+		recBson := make(map[string]interface{})
 		//fmt.Println("parsing result line")
 		columnPointers := make([]interface{}, len(columnNames))
 		//for i, _ := range columnNames {
@@ -860,7 +849,7 @@ func (dbobj SQLiteDB) GetAllTables() ([]string, error) {
 
 // ValidateNewApp function check if app name can be part of the table name
 func (dbobj SQLiteDB) ValidateNewApp(appName string) bool {
-	if contains(knownApps, appName) == true {
+	if SliceContains(knownApps, appName) == true {
 		return true
 	}
 	return true
@@ -886,7 +875,7 @@ func (dbobj SQLiteDB) execQueries(queries []string) error {
 
 // CreateNewAppTable creates a new app table and creates indexes for it.
 func (dbobj SQLiteDB) CreateNewAppTable(appName string) {
-	if contains(knownApps, appName) == false {
+	if SliceContains(knownApps, appName) == false {
 		// it is a new app, create an index
 		log.Printf("This is a new app, creating table & index for: %s\n", appName)
 		queries := []string{"CREATE TABLE IF NOT EXISTS " + appName + ` (

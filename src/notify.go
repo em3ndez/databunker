@@ -4,7 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
-	"io/ioutil"
+	"io"
 	"log"
 	"net/http"
 
@@ -56,10 +56,10 @@ func notifyConsentChange(notifyURL string, brief string, status string, mode str
 		return
 	}
 	requestBody, _ := json.Marshal(map[string]string{
-		"action":  "consentchange",
-		"brief":   brief,
-		"status":  status,
-		"mode":    mode,
+		"action":   "consentchange",
+		"brief":    brief,
+		"status":   status,
+		"mode":     mode,
 		"identity": identity,
 	})
 	host := autocontext.GetAuto("host")
@@ -80,7 +80,7 @@ func notify(notifyURL string, host interface{}, requestBody []byte) {
 		return
 	}
 	defer resp.Body.Close()
-	body, err := ioutil.ReadAll(resp.Body)
+	body, err := io.ReadAll(resp.Body)
 	if err != nil {
 		log.Printf("error in body read: %s", err)
 		return

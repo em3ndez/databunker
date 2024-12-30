@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/securitybunker/databunker/src/storage"
+	"github.com/securitybunker/databunker/src/utils"
 	"go.mongodb.org/mongo-driver/bson"
 )
 
@@ -18,23 +19,24 @@ type sessionEvent struct {
 func (dbobj dbcon) createSessionRecord(sessionUUID string, userTOKEN string, expiration string, data []byte) (string, error) {
 	var endtime int32
 	var err error
+	now := int32(time.Now().Unix())
 	if len(expiration) > 0 {
-		endtime, err = parseExpiration(expiration)
+		endtime, err = utils.ParseExpiration(expiration)
 		if err != nil {
 			return "", err
 		}
+		//log.Printf("expiration set to: %d, now: %d", endtime, now)
 	}
-	recordKey, err := generateRecordKey()
+	recordKey, err := utils.GenerateRecordKey()
 	if err != nil {
 		return "", err
 	}
-	encoded, err := encrypt(dbobj.masterKey, recordKey, data)
+	encoded, err := utils.Encrypt(dbobj.masterKey, recordKey, data)
 	if err != nil {
 		return "", err
 	}
 	encodedStr := base64.StdEncoding.EncodeToString(encoded)
 	bdoc := bson.M{}
-	now := int32(time.Now().Unix())
 	bdoc["token"] = userTOKEN
 	bdoc["session"] = sessionUUID
 	bdoc["endtime"] = endtime
@@ -63,6 +65,7 @@ func (dbobj dbcon) getSession(sessionUUID string) (int32, []byte, string, error)
 	}
 	// check expiration
 	now := int32(time.Now().Unix())
+	//log.Printf("getSession checking now: %d exp %d", now, record["endtime"].(int32))
 	if now > record["endtime"].(int32) {
 		return 0, nil, "", errors.New("session expired")
 	}
@@ -78,7 +81,7 @@ func (dbobj dbcon) getSession(sessionUUID string) (int32, []byte, string, error)
 	if err != nil {
 		return 0, nil, "", err
 	}
-	decrypted, err := decrypt(dbobj.masterKey, recordKey, encData)
+	decrypted, err := utils.Decrypt(dbobj.masterKey, recordKey, encData)
 	if err != nil {
 		return 0, nil, "", err
 	}
@@ -102,7 +105,7 @@ func (dbobj dbcon) getUserSessionsByToken(userTOKEN string, offset int32, limit 
 		recordKey0 := element["key"].(string)
 		recordKey, _ := base64.StdEncoding.DecodeString(recordKey0)
 		encData, _ := base64.StdEncoding.DecodeString(encData0)
-		decrypted, _ := decrypt(dbobj.masterKey, recordKey, encData)
+		decrypted, _ := utils.Decrypt(dbobj.masterKey, recordKey, encData)
 		sEvent := fmt.Sprintf(`{"when":%d,"session":"%s","data":%s}`, when, session, string(decrypted))
 		results = append(results, sEvent)
 	}

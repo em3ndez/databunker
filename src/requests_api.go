@@ -7,11 +7,13 @@ import (
 	"strings"
 
 	"github.com/julienschmidt/httprouter"
-	"go.mongodb.org/mongo-driver/bson"
+	"github.com/securitybunker/databunker/src/audit"
+	"github.com/securitybunker/databunker/src/utils"
 )
 
+// This function retrieves all requests that require admin approval. This function supports result pager.
 func (e mainEnv) getUserRequests(w http.ResponseWriter, r *http.Request, ps httprouter.Params) {
-	if e.enforceAuth(w, r, nil) == "" {
+	if e.EnforceAuth(w, r, nil) == "" {
 		return
 	}
 	var offset int32
@@ -19,17 +21,17 @@ func (e mainEnv) getUserRequests(w http.ResponseWriter, r *http.Request, ps http
 	status := "open"
 	args := r.URL.Query()
 	if value, ok := args["offset"]; ok {
-		offset = atoi(value[0])
+		offset = utils.Atoi(value[0])
 	}
 	if value, ok := args["limit"]; ok {
-		limit = atoi(value[0])
+		limit = utils.Atoi(value[0])
 	}
 	if value, ok := args["status"]; ok {
 		status = value[0]
 	}
 	resultJSON, counter, err := e.db.getRequests(status, offset, limit)
 	if err != nil {
-		returnError(w, r, "internal error", 405, err, nil)
+		utils.ReturnError(w, r, "internal error", 405, err, nil)
 		return
 	}
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
@@ -38,52 +40,34 @@ func (e mainEnv) getUserRequests(w http.ResponseWriter, r *http.Request, ps http
 	w.Write([]byte(str))
 }
 
+// Get list of requests for specific user
 func (e mainEnv) getCustomUserRequests(w http.ResponseWriter, r *http.Request, ps httprouter.Params) {
 	identity := ps.ByName("identity")
 	mode := ps.ByName("mode")
-	event := audit("get user privacy requests", identity, mode, identity)
-	defer func() { event.submit(e.db) }()
+	event := audit.CreateAuditEvent("get user privacy requests", identity, mode, identity)
+	defer func() { SaveAuditEvent(event, e.db, e.conf) }()
 
-	if validateMode(mode) == false {
-		returnError(w, r, "bad mode", 405, nil, event)
+	if e.EnforceAuth(w, r, event) == "" {
 		return
 	}
-	userTOKEN := identity
-	var userBson bson.M
-	if mode == "token" {
-		if enforceUUID(w, identity, event) == false {
-			return
-		}
-		userBson, _ = e.db.lookupUserRecord(identity)
-	} else {
-		userBson, _ = e.db.lookupUserRecordByIndex(mode, identity, e.conf)
-		if userBson != nil {
-			userTOKEN = userBson["token"].(string)
-			event.Record = userTOKEN
-		}
-	}
-	if userBson == nil {
-		returnError(w, r, "internal error", 405, nil, event)
-		return
-	}
-	if e.enforceAuth(w, r, event) == "" {
+	userTOKEN := e.loadUserToken(w, r, mode, identity, event)
+	if userTOKEN == "" {
 		return
 	}
 	var offset int32
 	var limit int32 = 10
 	args := r.URL.Query()
 	if value, ok := args["offset"]; ok {
-		offset = atoi(value[0])
+		offset = utils.Atoi(value[0])
 	}
 	if value, ok := args["limit"]; ok {
-		limit = atoi(value[0])
+		limit = utils.Atoi(value[0])
 	}
 	resultJSON, counter, err := e.db.getUserRequests(userTOKEN, offset, limit)
 	if err != nil {
-		returnError(w, r, "internal error", 405, err, nil)
+		utils.ReturnError(w, r, "internal error", 405, err, nil)
 		return
 	}
-	fmt.Printf("Total count of custom user requests: %d\n", counter)
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.WriteHeader(200)
 	str := fmt.Sprintf(`{"status":"ok","total":%d,"rows":%s}`, counter, resultJSON)
@@ -92,34 +76,33 @@ func (e mainEnv) getCustomUserRequests(w http.ResponseWriter, r *http.Request, p
 
 func (e mainEnv) getUserRequest(w http.ResponseWriter, r *http.Request, ps httprouter.Params) {
 	request := ps.ByName("request")
-	event := audit("get user request by request token", request, "request", request)
-	defer func() { event.submit(e.db) }()
+	event := audit.CreateAuditEvent("get user request by request token", request, "request", request)
+	defer func() { SaveAuditEvent(event, e.db, e.conf) }()
 
-	if enforceUUID(w, request, event) == false {
+	if utils.EnforceUUID(w, request, event) == false {
 		return
 	}
 	requestInfo, err := e.db.getRequest(request)
 	if err != nil {
-		returnError(w, r, "internal error", 405, err, nil)
+		utils.ReturnError(w, r, "internal error", 405, err, nil)
 		return
 	}
 	if len(requestInfo) == 0 {
-		returnError(w, r, "not found", 405, err, event)
+		utils.ReturnError(w, r, "not found", 405, err, event)
 		return
 	}
 	var resultJSON []byte
-	action := getStringValue(requestInfo["action"])
-	userTOKEN := getStringValue(requestInfo["token"])
+	action := utils.GetStringValue(requestInfo["action"])
+	userTOKEN := utils.GetStringValue(requestInfo["token"])
 	if len(userTOKEN) != 0 {
 		event.Record = userTOKEN
 	}
-	authResult := e.enforceAuth(w, r, event)
-	if authResult == "" {
+	if e.EnforceAdmin(w, r, event) == "" {
 		return
 	}
-	change := getStringValue(requestInfo["change"])
-	appName := getStringValue(requestInfo["app"])
-	brief := getStringValue(requestInfo["brief"])
+	change := utils.GetStringValue(requestInfo["change"])
+	appName := utils.GetStringValue(requestInfo["app"])
+	brief := utils.GetStringValue(requestInfo["brief"])
 	if strings.HasPrefix(action, "plugin") {
 		brief = ""
 	}
@@ -128,14 +111,14 @@ func (e mainEnv) getUserRequest(w http.ResponseWriter, r *http.Request, ps httpr
 	} else if len(brief) > 0 {
 		resultJSON, err = e.db.viewAgreementRecord(userTOKEN, brief)
 	} else {
-		resultJSON, err = e.db.getUserJson(userTOKEN)
+		resultJSON, err = e.db.getUserJSON(userTOKEN)
 	}
 	if err != nil {
-		returnError(w, r, "internal error", 405, err, event)
+		utils.ReturnError(w, r, "internal error", 405, err, event)
 		return
 	}
 	if resultJSON == nil {
-		returnError(w, r, "not found", 405, err, event)
+		utils.ReturnError(w, r, "not found", 405, err, event)
 		return
 	}
 	//fmt.Printf("Full json: %s\n", resultJSON)
@@ -161,52 +144,52 @@ func (e mainEnv) getUserRequest(w http.ResponseWriter, r *http.Request, ps httpr
 
 func (e mainEnv) approveUserRequest(w http.ResponseWriter, r *http.Request, ps httprouter.Params) {
 	request := ps.ByName("request")
-	event := audit("approve user request", request, "request", request)
-	defer func() { event.submit(e.db) }()
+	event := audit.CreateAuditEvent("approve user request", request, "request", request)
+	defer func() { SaveAuditEvent(event, e.db, e.conf) }()
 
-	if enforceUUID(w, request, event) == false {
+	if utils.EnforceUUID(w, request, event) == false {
 		return
 	}
-	authResult := e.enforceAdmin(w, r)
+	authResult := e.EnforceAdmin(w, r, event)
 	if authResult == "" {
 		return
 	}
-	records, err := getJSONPostMap(r)
+	records, err := utils.GetJSONPostMap(r)
 	if err != nil {
-		returnError(w, r, "failed to decode request body", 405, err, event)
+		utils.ReturnError(w, r, "failed to decode request body", 405, err, event)
 		return
 	}
-	reason := getStringValue(records["reason"])
+	reason := utils.GetStringValue(records["reason"])
 	requestInfo, err := e.db.getRequest(request)
 	if err != nil {
-		returnError(w, r, "internal error", 405, err, event)
+		utils.ReturnError(w, r, "internal error", 405, err, event)
 		return
 	}
 	if len(requestInfo) == 0 {
-		returnError(w, r, "not found", 405, err, event)
+		utils.ReturnError(w, r, "not found", 405, err, event)
 		return
 	}
-	userTOKEN := getStringValue(requestInfo["token"])
+	userTOKEN := utils.GetStringValue(requestInfo["token"])
 	if len(userTOKEN) != 0 {
 		event.Record = userTOKEN
 	}
-	action := getStringValue(requestInfo["action"])
-	status := getStringValue(requestInfo["status"])
+	action := utils.GetStringValue(requestInfo["action"])
+	status := utils.GetStringValue(requestInfo["status"])
 	if status != "open" {
-		returnError(w, r, "wrong status: "+status, 405, err, event)
+		utils.ReturnError(w, r, "wrong status: "+status, 405, err, event)
 		return
 	}
 	userJSON, userBSON, err := e.db.getUser(userTOKEN)
 	if err != nil {
-		returnError(w, r, "internal error", 405, err, event)
+		utils.ReturnError(w, r, "internal error", 405, err, event)
 		return
 	}
 	if userJSON == nil {
-		returnError(w, r, "not found", 405, err, event)
+		utils.ReturnError(w, r, "not found", 405, err, event)
 		return
 	}
 	if action == "forget-me" {
-		email := getStringValue(userBSON["email"])
+		email := utils.GetStringValue(userBSON["email"])
 		if len(email) > 0 {
 			e.globalUserDelete(email)
 		}
@@ -217,29 +200,29 @@ func (e mainEnv) approveUserRequest(w http.ResponseWriter, r *http.Request, ps h
 			event.Msg = "failed to delete"
 		}
 		if err != nil {
-                        returnError(w, r, "internal error", 405, err, event)
-                        return
-                }
+			utils.ReturnError(w, r, "internal error", 405, err, event)
+			return
+		}
 		notifyURL := e.conf.Notification.NotificationURL
 		notifyForgetMe(notifyURL, userJSON, "token", userTOKEN)
 	} else if action == "change-profile" {
 		oldJSON, newJSON, lookupErr, err := e.db.updateUserRecord(requestInfo["change"].([]uint8), userTOKEN, userBSON, event, e.conf)
 		if lookupErr {
-			returnError(w, r, "internal error", 405, errors.New("not found"), event)
+			utils.ReturnError(w, r, "internal error", 405, errors.New("not found"), event)
 			return
 		}
 		if err != nil {
-			returnError(w, r, "internal error", 405, err, event)
+			utils.ReturnError(w, r, "internal error", 405, err, event)
 			return
 		}
-		returnUUID(w, userTOKEN)
+		utils.ReturnUUID(w, userTOKEN)
 		notifyURL := e.conf.Notification.NotificationURL
 		notifyProfileChange(notifyURL, oldJSON, newJSON, "token", userTOKEN)
 	} else if action == "change-app-data" {
 		app := requestInfo["app"].(string)
 		_, err = e.db.updateAppRecord(requestInfo["change"].([]uint8), userTOKEN, app, event, e.conf)
 		if err != nil {
-			returnError(w, r, "internal error", 405, err, event)
+			utils.ReturnError(w, r, "internal error", 405, err, event)
 			return
 		}
 	} else if action == "agreement-withdraw" {
@@ -259,46 +242,46 @@ func (e mainEnv) approveUserRequest(w http.ResponseWriter, r *http.Request, ps h
 
 func (e mainEnv) cancelUserRequest(w http.ResponseWriter, r *http.Request, ps httprouter.Params) {
 	request := ps.ByName("request")
-	event := audit("cancel user request", request, "request", request)
-	defer func() { event.submit(e.db) }()
+	event := audit.CreateAuditEvent("cancel user request", request, "request", request)
+	defer func() { SaveAuditEvent(event, e.db, e.conf) }()
 
-	if enforceUUID(w, request, event) == false {
+	if utils.EnforceUUID(w, request, event) == false {
 		return
 	}
-	records, err := getJSONPostMap(r)
+	records, err := utils.GetJSONPostMap(r)
 	if err != nil {
-		returnError(w, r, "failed to decode request body", 405, err, event)
+		utils.ReturnError(w, r, "failed to decode request body", 405, err, event)
 		return
 	}
-	reason := getStringValue(records["reason"])
+	reason := utils.GetStringValue(records["reason"])
 	requestInfo, err := e.db.getRequest(request)
 	if err != nil {
-		returnError(w, r, "internal error", 405, err, event)
+		utils.ReturnError(w, r, "internal error", 405, err, event)
 		return
 	}
 	if len(requestInfo) == 0 {
-		returnError(w, r, "not found", 405, err, event)
+		utils.ReturnError(w, r, "not found", 405, err, event)
 		return
 	}
-	userTOKEN := getStringValue(requestInfo["token"])
+	userTOKEN := utils.GetStringValue(requestInfo["token"])
 	if len(userTOKEN) != 0 {
 		event.Record = userTOKEN
 	}
-	authResult := e.enforceAuth(w, r, event)
+	authResult := e.EnforceAuth(w, r, event)
 	if authResult == "" {
 		return
 	}
 	if requestInfo["status"].(string) != "open" {
-		returnError(w, r, "wrong status: "+requestInfo["status"].(string), 405, err, event)
+		utils.ReturnError(w, r, "wrong status: "+requestInfo["status"].(string), 405, err, event)
 		return
 	}
-	resultJSON, err := e.db.getUserJson(userTOKEN)
+	resultJSON, err := e.db.getUserJSON(userTOKEN)
 	if err != nil {
-		returnError(w, r, "internal error", 405, err, event)
+		utils.ReturnError(w, r, "internal error", 405, err, event)
 		return
 	}
 	if resultJSON == nil {
-		returnError(w, r, "not found", 405, err, event)
+		utils.ReturnError(w, r, "not found", 405, err, event)
 		return
 	}
 	if len(reason) == 0 && authResult == "login" {
